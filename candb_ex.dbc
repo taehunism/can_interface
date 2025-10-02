@@ -1,0 +1,79 @@
+VERSION "Example Vehicle Simulation DBC"
+
+NS_ :
+BS_ :
+BU_ : Vector__XXX
+
+BO_ 100 VehicleStatus: 8 Vector__XXX
+ SG_ VehicleSpeed : 0|16@1+ (0.01,0) [0|250] "km/h" Vector__XXX
+ SG_ SteeringAngle : 16|16@1+ (0.1,-7800) [-7800|7800] "deg" Vector__XXX
+
+BO_ 101 VehicleAccel: 8 Vector__XXX
+ SG_ LateralAccel : 0|16@1+ (0.001,0) [-10|10] "m/s2" Vector__XXX
+
+BO_ 102 LaneInfo: 8 Vector__XXX
+ SG_ LaneC0 : 0|8@1+ (1,0) [0|1] "" Vector__XXX
+ SG_ LaneC1 : 8|8@1+ (1,0) [0|1] "" Vector__XXX
+ SG_ LaneC2 : 16|8@1+ (1,0) [0|1] "" Vector__XXX
+ SG_ LaneC3 : 24|8@1+ (1,0) [0|1] "" Vector__XXX
+
+BO_ 200 RadarObj1: 8 Vector__XXX
+ SG_ RelPosX1 : 0|16@1+ (0.1,-1000) [-1000|1000] "m" Vector__XXX
+ SG_ RelPosY1 : 16|16@1+ (0.1,-1000) [-1000|1000] "m" Vector__XXX
+ SG_ RelVelX1 : 32|16@1+ (0.1,-100) [-100|100] "m/s" Vector__XXX
+ SG_ RelAccX1 : 48|16@1+ (0.1,-50) [-50|50] "m/s2" Vector__XXX
+
+BO_ 201 RadarObj2: 8 Vector__XXX
+ SG_ RelPosX2 : 0|16@1+ (0.1,-1000) [-1000|1000] "m" Vector__XXX
+ SG_ RelPosY2 : 16|16@1+ (0.1,-1000) [-1000|1000] "m" Vector__XXX
+ SG_ RelVelX2 : 32|16@1+ (0.1,-100) [-100|100] "m/s" Vector__XXX
+ SG_ RelAccX2 : 48|16@1+ (0.1,-50) [-50|50] "m/s2" Vector__XXX
+
+// 동일형태로 10개 레이더 객체 메시지 (ID 200~209)
+BO_ 202 RadarObj3: 8 Vector__XXX
+ SG_ RelPosX3 : 0|16@1+ (0.1,-1000) [-1000|1000] "m" Vector__XXX
+ SG_ RelPosY3 : 16|16@1+ (0.1,-1000) [-1000|1000] "m" Vector__XXX
+ SG_ RelVelX3 : 32|16@1+ (0.1,-100) [-100|100] "m/s" Vector__XXX
+ SG_ RelAccX3 : 48|16@1+ (0.1,-50) [-50|50] "m/s2" Vector__XXX
+
+BO_ 203 RadarObj4: 8 Vector__XXX
+ SG_ RelPosX4 : 0|16@1+ (0.1,-1000) [-1000|1000] "m" Vector__XXX
+ SG_ RelPosY4 : 16|16@1+ (0.1,-1000) [-1000|1000] "m" Vector__XXX
+ SG_ RelVelX4 : 32|16@1+ (0.1,-100) [-100|100] "m/s" Vector__XXX
+ SG_ RelAccX4 : 48|16@1+ (0.1,-50) [-50|50] "m/s2" Vector__XXX
+
+BO_ 204 RadarObj5: 8 Vector__XXX
+ SG_ RelPosX5 : 0|16@1+ (0.1,-1000) [-1000|1000] "m" Vector__XXX
+ SG_ RelPosY5 : 16|16@1+ (0.1,-1000) [-1000|1000] "m" Vector__XXX
+ SG_ RelVelX5 : 32|16@1+ (0.1,-100) [-100|100] "m/s" Vector__XXX
+ SG_ RelAccX5 : 48|16@1+ (0.1,-50) [-50|50] "m/s2" Vector__XXX
+
+BO_ 205 RadarObj6: 8 Vector__XXX
+ SG_ RelPosX6 : 0|16@1+ (0.1,-1000) [-1000|1000] "m" Vector__XXX
+ SG_ RelPosY6 : 16|16@1+ (0.1,-1000) [-1000|1000] "m" Vector__XXX
+ SG_ RelVelX6 : 32|16@1+ (0.1,-100) [-100|100] "m/s" Vector__XXX
+ SG_ RelAccX6 : 48|16@1+ (0.1,-50) [-50|50] "m/s2" Vector__XXX
+
+BO_ 206 RadarObj7: 8 Vector__XXX
+ SG_ RelPosX7 : 0|16@1+ (0.1,-1000) [-1000|1000] "m" Vector__XXX
+ SG_ RelPosY7 : 16|16@1+ (0.1,-1000) [-1000|1000] "m" Vector__XXX
+ SG_ RelVelX7 : 32|16@1+ (0.1,-100) [-100|100] "m/s" Vector__XXX
+ SG_ RelAccX7 : 48|16@1+ (0.1,-50) [-50|50] "m/s2" Vector__XXX
+
+BO_ 207 RadarObj8: 8 Vector__XXX
+ SG_ RelPosX8 : 0|16@1+ (0.1,-1000) [-1000|1000] "m" Vector__XXX
+ SG_ RelPosY8 : 16|16@1+ (0.1,-1000) [-1000|1000] "m" Vector__XXX
+ SG_ RelVelX8 : 32|16@1+ (0.1,-100) [-100|100] "m/s" Vector__XXX
+ SG_ RelAccX8 : 48|16@1+ (0.1,-50) [-50|50] "m/s2" Vector__XXX
+
+BO_ 208 RadarObj9: 8 Vector__XXX
+ SG_ RelPosX9 : 0|16@1+ (0.1,-1000) [-1000|1000] "m" Vector__XXX
+ SG_ RelPosY9 : 16|16@1+ (0.1,-1000) [-1000|1000] "m" Vector__XXX
+ SG_ RelVelX9 : 32|16@1+ (0.1,-100) [-100|100] "m/s" Vector__XXX
+ SG_ RelAccX9 : 48|16@1+ (0.1,-50) [-50|50] "m/s2" Vector__XXX
+
+BO_ 209 RadarObj10: 8 Vector__XXX
+ SG_ RelPosX10 : 0|16@1+ (0.1,-1000) [-1000|1000] "m" Vector__XXX
+ SG_ RelPosY10 : 16|16@1+ (0.1,-1000) [-1000|1000] "m" Vector__XXX
+ SG_ RelVelX10 : 32|16@1+ (0.1,-100) [-100|100] "m/s" Vector__XXX
+ SG_ RelAccX10 : 48|16@1+ (0.1,-50) [-50|50] "m/s2" Vector__XXX
