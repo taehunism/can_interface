@@ -1,0 +1,6 @@
+PyQt5==5.15.9
+python-can==4.3.1
+cantools==39.4.1
+pandas==2.0.3
+numpy==1.24.3
+dataclasses==0.8

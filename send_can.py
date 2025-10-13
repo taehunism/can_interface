@@ -1,6 +1,7 @@
 import can
 import random
 import time
+import sys
 
 def random_int16(min_val, max_val):
     # 16비트 부호 있는 범위 내 정수 변환 함수
@@ -13,8 +14,39 @@ def to_int16(val, scale):
     elif raw > 32767:
         raw = 32767
     return raw
+def connect_can_interface():
+    """Windows용 CAN 인터페이스 연결"""
+    interfaces_to_try = [
+        ('pcan', 'PCAN_USBBUS1'),  # PEAK PCAN-USB
+        ('vector', '0'),           # Vector CANoe/CANalyzer
+        ('ixxat', '0'),            # IXXAT USB-to-CAN
+        ('socketcan', 'can0'),     # SocketCAN (Linux 호환)
+        ('virtual', 'vcan0'),      # Virtual CAN (테스트용)
+    ]
+    
+    for interface, channel in interfaces_to_try:
+        try:
+            bus = can.interface.Bus(
+                channel=channel, 
+                interface=interface,
+                bitrate=500000  # 500kbps
+            )
+            print(f"CAN 인터페이스 연결 성공: {interface} - {channel}")
+            return bus
+        except Exception as e:
+            print(f"CAN 인터페이스 연결 실패: {interface} - {channel}, 오류: {e}")
+            continue
+    
+    print("사용 가능한 CAN 인터페이스를 찾을 수 없습니다.")
+    return None
+
 def main():
-    bus = can.interface.Bus(channel='vcan0', interface='socketcan')
+    print("Windows CAN 송신 프로그램 시작")
+    bus = connect_can_interface()
+    
+    if not bus:
+        print("CAN 인터페이스 연결에 실패했습니다. 프로그램을 종료합니다.")
+        sys.exit(1)
 
     while True:
         # 100 메시지 - 차량 속도 및 스티어링 앵글
@@ -76,4 +108,15 @@ def main():
         time.sleep(0.1)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n프로그램이 Ctrl+C로 종료되었습니다.")
+        if 'bus' in locals():
+            bus.shutdown()
+        sys.exit(0)
+    except Exception as e:
+        print(f"오류 발생: {e}")
+        if 'bus' in locals():
+            bus.shutdown()
+        sys.exit(1)
