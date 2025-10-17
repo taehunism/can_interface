@@ -6,6 +6,7 @@ import threading
 import pandas as pd
 import time
 from radar_data import RadarDataManager, RadarObject
+from tsmaster_can_processor import TSMasterCanProcessor, AdvancedCanMessage, MessageStatus
 
 
 class CanDataViewer(QtWidgets.QWidget):
@@ -15,7 +16,9 @@ class CanDataViewer(QtWidgets.QWidget):
         self.setWindowTitle("TAEHUNISM - Windows CAN Interface")
         self.resize(1000, 700)
 
-        self.db = cantools.database.load_file(dbc_path)
+        # TSMaster 스타일 고급 CAN 데이터 처리기 초기화
+        self.tsmaster_processor = TSMasterCanProcessor(dbc_path)
+        self.db = self.tsmaster_processor.db  # DBC 데이터베이스 참조
 
         self.messages = []
         self.delta_t_mode = False
@@ -37,11 +40,21 @@ class CanDataViewer(QtWidgets.QWidget):
         self.can_interface = None
         self.can_channel = None
         
-        # 더미 데이터 전송 관련
-        self.dummy_data_active = False
-        self.dummy_data_thread = None
+        # 더미 데이터 시뮬레이션 관련
         self.dummy_simulation_active = False
         self.dummy_simulation_thread = None
+        
+        # 통계 정보
+        self.stats_label = None
+        
+        # 정렬 상태
+        self.sort_by_name = False
+        self.sort_reverse = False
+        
+        # 필터링 상태
+        self.filter_active = False
+        self.filter_message = ""
+        self.filter_signal = ""
 
         # UI 버튼 생성
         self.btn_start = QtWidgets.QPushButton("Start", self)
@@ -51,10 +64,13 @@ class CanDataViewer(QtWidgets.QWidget):
         self.btn_log_end = QtWidgets.QPushButton("Log End", self)
         self.btn_connect = QtWidgets.QPushButton("Connect CAN", self)
         self.btn_disconnect = QtWidgets.QPushButton("Disconnect CAN", self)
+        self.btn_sort = QtWidgets.QPushButton("Sort by Name", self)
+        self.btn_reverse = QtWidgets.QPushButton("Reverse", self)
+        self.btn_filter = QtWidgets.QPushButton("Filter", self)
 
         btn_font = QtGui.QFont("Arial", 11, QtGui.QFont.Bold)
         for btn in (self.btn_start, self.btn_stop, self.btn_delta_t, self.btn_log, 
-                   self.btn_log_end, self.btn_connect, self.btn_disconnect):
+                   self.btn_log_end, self.btn_connect, self.btn_disconnect, self.btn_sort, self.btn_reverse, self.btn_filter):
             btn.setFont(btn_font)
             btn.setFixedHeight(40)
 
@@ -72,6 +88,9 @@ class CanDataViewer(QtWidgets.QWidget):
         btn_layout.addWidget(self.btn_delta_t)
         btn_layout.addWidget(self.btn_log)
         btn_layout.addWidget(self.btn_log_end)
+        btn_layout.addWidget(self.btn_sort)
+        btn_layout.addWidget(self.btn_reverse)
+        btn_layout.addWidget(self.btn_filter)
 
         # 메인 테이블
         self.table = QtWidgets.QTableWidget(self)
@@ -96,6 +115,11 @@ class CanDataViewer(QtWidgets.QWidget):
         # 레이더 요약 정보 라벨
         self.radar_summary = QtWidgets.QLabel("No radar data")
         self.radar_summary.setFont(QtGui.QFont("Arial", 10))
+        
+        # CAN 처리 통계 라벨
+        self.stats_label = QtWidgets.QLabel("CAN Statistics: No data")
+        self.stats_label.setFont(QtGui.QFont("Arial", 9))
+        self.stats_label.setStyleSheet("color: blue;")
 
         main_layout = QtWidgets.QVBoxLayout(self)
         main_layout.addLayout(btn_layout)
@@ -103,6 +127,7 @@ class CanDataViewer(QtWidgets.QWidget):
         main_layout.addWidget(self.radar_label)
         main_layout.addWidget(self.radar_table)
         main_layout.addWidget(self.radar_summary)
+        main_layout.addWidget(self.stats_label)
 
         # 버튼 이벤트 연결
         self.btn_connect.clicked.connect(self.connect_can)
@@ -112,6 +137,9 @@ class CanDataViewer(QtWidgets.QWidget):
         self.btn_delta_t.clicked.connect(self.toggle_delta_t)
         self.btn_log.clicked.connect(self.start_logging)
         self.btn_log_end.clicked.connect(self.end_logging)
+        self.btn_sort.clicked.connect(self.toggle_sort)
+        self.btn_reverse.clicked.connect(self.toggle_reverse)
+        self.btn_filter.clicked.connect(self.show_filter_dialog)
 
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.refresh_table)
@@ -120,35 +148,55 @@ class CanDataViewer(QtWidgets.QWidget):
     def connect_can(self):
         """CAN 인터페이스 연결"""
         try:
-            # Windows에서 사용 가능한 CAN 인터페이스들 시도
+            # Windows에서 사용 가능한 CAN/CAN FD 인터페이스들 시도
             interfaces_to_try = [
-                ('pcan', 'PCAN_USBBUS1'),  # PEAK PCAN-USB
-                ('vector', '0'),           # Vector CANoe/CANalyzer
-                ('ixxat', '0'),            # IXXAT USB-to-CAN
-                ('socketcan', 'can0'),     # SocketCAN (Linux 호환)
-                ('virtual', 'vcan0'),      # Virtual CAN (테스트용)
+                # CAN FD 지원 인터페이스들
+                ('pcan', 'PCAN_USBBUS1', True),   # PEAK PCAN-USB (CAN FD 지원)
+                ('vector', '0', True),            # Vector CANoe/CANalyzer (CAN FD 지원)
+                ('ixxat', '0', True),             # IXXAT USB-to-CAN (CAN FD 지원)
+                ('socketcan', 'can0', True),      # SocketCAN (CAN FD 지원)
+                # 일반 CAN 인터페이스들
+                ('pcan', 'PCAN_USBBUS1', False),  # PEAK PCAN-USB (CAN만)
+                ('vector', '0', False),           # Vector CANoe/CANalyzer (CAN만)
+                ('ixxat', '0', False),            # IXXAT USB-to-CAN (CAN만)
+                ('socketcan', 'can0', False),     # SocketCAN (CAN만)
+                ('virtual', 'vcan0', False),      # Virtual CAN (테스트용)
             ]
             
             connected = False
-            for interface, channel in interfaces_to_try:
+            for interface, channel, is_can_fd in interfaces_to_try:
                 try:
-                    self.can_interface = can.interface.Bus(
-                        channel=channel, 
-                        interface=interface,
-                        bitrate=500000  # 500kbps
-                    )
-                    self.can_channel = channel
-                    connected = True
-                    print(f"CAN 인터페이스 연결 성공: {interface} - {channel}")
+                    if is_can_fd:
+                        # CAN FD 연결 시도
+                        self.can_interface = can.interface.Bus(
+                            channel=channel, 
+                            interface=interface,
+                            bitrate=500000,  # 데이터 비트레이트 500kbps
+                            fd=True,         # CAN FD 활성화
+                            data_bitrate=2000000  # 데이터 비트레이트 2Mbps
+                        )
+                        self.can_channel = channel
+                        connected = True
+                        print(f"CAN FD 인터페이스 연결 성공: {interface} - {channel} (CAN FD 모드)")
+                    else:
+                        # 일반 CAN 연결 시도
+                        self.can_interface = can.interface.Bus(
+                            channel=channel, 
+                            interface=interface,
+                            bitrate=500000  # 500kbps
+                        )
+                        self.can_channel = channel
+                        connected = True
+                        print(f"CAN 인터페이스 연결 성공: {interface} - {channel} (CAN 모드)")
                     
-                    # Virtual CAN으로 연결된 경우 더미 데이터 전송 시작
+                    # Virtual CAN으로 연결된 경우 더미 데이터 시뮬레이션 시작
                     if interface == 'virtual':
-                        print("Virtual CAN으로 연결됨. 더미 데이터 전송을 시작합니다.")
-                        self.start_dummy_data_transmission()
+                        print("Virtual CAN으로 연결됨. 더미 데이터 시뮬레이션을 시작합니다.")
+                        self.start_dummy_data_simulation()
                     
                     break
                 except Exception as e:
-                    print(f"CAN 인터페이스 연결 실패: {interface} - {channel}, 오류: {e}")
+                    print(f"CAN 인터페이스 연결 실패: {interface} - {channel} (CAN FD: {is_can_fd}), 오류: {e}")
                     continue
             
             if not connected:
@@ -198,9 +246,7 @@ class CanDataViewer(QtWidgets.QWidget):
     def disconnect_can(self):
         """CAN 인터페이스 연결 해제"""
         try:
-            # 더미 데이터 전송 및 시뮬레이션 중지
-            if self.dummy_data_active:
-                self.stop_dummy_data_transmission()
+            # 더미 데이터 시뮬레이션 중지
             if self.dummy_simulation_active:
                 self.stop_dummy_data_simulation()
             
@@ -221,26 +267,6 @@ class CanDataViewer(QtWidgets.QWidget):
         except Exception as e:
             print(f"CAN 연결 해제 중 오류 발생: {e}")
 
-    def start_dummy_data_transmission(self):
-        """더미 데이터 전송 시작"""
-        if not self.dummy_data_active:
-            self.dummy_data_active = True
-            self.dummy_data_thread = threading.Thread(target=self._dummy_data_worker, daemon=True)
-            self.dummy_data_thread.start()
-            print("더미 데이터 전송이 시작되었습니다.")
-            
-            # 더미 데이터를 직접 처리하도록 시뮬레이션
-            self.start_dummy_data_simulation()
-
-    def stop_dummy_data_transmission(self):
-        """더미 데이터 전송 중지"""
-        self.dummy_data_active = False
-        if self.dummy_data_thread:
-            self.dummy_data_thread.join(timeout=1)
-        
-        # 더미 시뮬레이션도 중지
-        self.stop_dummy_data_simulation()
-        print("더미 데이터 전송이 중지되었습니다.")
 
     def start_dummy_data_simulation(self):
         """더미 데이터 시뮬레이션 시작 (직접 처리)"""
@@ -324,110 +350,36 @@ class CanDataViewer(QtWidgets.QWidget):
                 time.sleep(1)
 
     def _create_vehicle_status_data(self, speed, steering):
-        """차량 상태 데이터 생성"""
+        """차량 상태 데이터 생성 (8바이트)"""
         speed_raw = self._to_int16(speed, 0.01)
         steering_raw = self._to_int16(steering, 0.1)
+        # 8바이트 데이터: speed(2) + steering(2) + padding(4)
         return speed_raw.to_bytes(2, 'little', signed=True) + steering_raw.to_bytes(2, 'little', signed=True) + bytes(4)
 
     def _create_accel_data(self, lat_accel):
-        """가속도 데이터 생성"""
+        """가속도 데이터 생성 (8바이트)"""
         lat_accel_raw = int(lat_accel / 0.001)
+        # 8바이트 데이터: lat_accel(2) + padding(6)
         return lat_accel_raw.to_bytes(2, 'little', signed=True) + bytes(6)
 
     def _create_lane_data(self, lane_data):
-        """차선 데이터 생성"""
+        """차선 데이터 생성 (8바이트)"""
+        # 8바이트 데이터: lane_data(4) + padding(4)
         return bytes(lane_data) + bytes(4)
 
     def _create_radar_data(self, rel_pos_x, rel_pos_y, rel_vel_x, rel_acc_x):
-        """레이더 데이터 생성"""
+        """레이더 데이터 생성 (8바이트)"""
         x_raw = self._to_raw(rel_pos_x)
         y_raw = self._to_raw(rel_pos_y)
         vel_raw = self._to_raw(rel_vel_x)
         acc_raw = self._to_raw(rel_acc_x)
         
+        # 8바이트 데이터: x(2) + y(2) + vel(2) + acc(2)
         return (x_raw.to_bytes(2, 'little') +
                 y_raw.to_bytes(2, 'little') +
                 vel_raw.to_bytes(2, 'little') +
                 acc_raw.to_bytes(2, 'little'))
 
-    def _dummy_data_worker(self):
-        """더미 데이터 전송 워커 스레드"""
-        import random
-        
-        print("더미 데이터 전송 워커 시작")
-        
-        while self.dummy_data_active and self.can_interface:
-            try:
-                # 100 메시지 - 차량 속도 및 스티어링 앵글
-                speed = random.uniform(0, 250)
-                steering = random.uniform(-7800, 7800)
-                
-                speed_raw = self._to_int16(speed, 0.01)
-                steering_raw = self._to_int16(steering, 0.1)
-                
-                data_100 = speed_raw.to_bytes(2, 'little', signed=True) + steering_raw.to_bytes(2, 'little', signed=True) + bytes(4)
-                msg_100 = can.Message(arbitration_id=100, data=data_100, is_extended_id=False)
-                self.can_interface.send(msg_100)
-                print(f"전송: ID=100, Speed={speed:.1f}, Steering={steering:.1f}")
-                
-                # 101 메시지 - 횡가속도
-                lat_accel = random.uniform(-10, 10)
-                lat_accel_raw = int(lat_accel / 0.001)
-                data_101 = lat_accel_raw.to_bytes(2, 'little', signed=True) + bytes(6)
-                msg_101 = can.Message(arbitration_id=101, data=data_101, is_extended_id=False)
-                self.can_interface.send(msg_101)
-                
-                # 102 메시지 - 차선정보
-                lane_c0 = random.randint(0, 1)
-                lane_c1 = random.randint(0, 1)
-                lane_c2 = random.randint(0, 1)
-                lane_c3 = random.randint(0, 1)
-                data_102 = bytes([lane_c0, lane_c1, lane_c2, lane_c3]) + bytes(4)
-                msg_102 = can.Message(arbitration_id=102, data=data_102, is_extended_id=False)
-                self.can_interface.send(msg_102)
-                
-                # 200~209 메시지 - 10개 레이더 객체
-                for i in range(200, 210):
-                    rel_pos_x = random.uniform(-100, 100)
-                    rel_pos_y = random.uniform(-50, 50)
-                    rel_vel_x = random.uniform(-20, 20)
-                    rel_acc_x = random.uniform(-5, 5)
-                    
-                    x_raw = self._to_raw(rel_pos_x)
-                    y_raw = self._to_raw(rel_pos_y)
-                    vel_raw = self._to_raw(rel_vel_x)
-                    acc_raw = self._to_raw(rel_acc_x)
-                    
-                    data = (x_raw.to_bytes(2, 'little') +
-                           y_raw.to_bytes(2, 'little') +
-                           vel_raw.to_bytes(2, 'little') +
-                           acc_raw.to_bytes(2, 'little'))
-                    
-                    msg_radar = can.Message(arbitration_id=i, data=data, is_extended_id=False)
-                    self.can_interface.send(msg_radar)
-                
-                print(f"레이더 데이터 전송 완료 (ID 200-209)")
-                time.sleep(0.1)  # 100ms 간격
-                
-            except Exception as e:
-                print(f"더미 데이터 전송 오류: {e}")
-                time.sleep(1)
-
-    def _to_int16(self, val, scale):
-        """값을 16비트 정수로 변환"""
-        raw = int(val / scale)
-        if raw < -32768:
-            raw = -32768
-        elif raw > 32767:
-            raw = 32767
-        return raw
-
-    def _to_raw(self, val, scale=0.1, offset=0):
-        """값을 raw 데이터로 변환"""
-        raw = int((val - offset) / scale)
-        if raw < 0:
-            raw = (1 << 16) + raw
-        return raw
 
     def start_receiving(self):
         if not self.can_interface:
@@ -512,13 +464,137 @@ class CanDataViewer(QtWidgets.QWidget):
         except Exception as e:
             print(f"CSV 저장 중 오류 발생: {e}")
 
+    def toggle_sort(self):
+        """정렬 모드 토글"""
+        self.sort_by_name = not self.sort_by_name
+        if self.sort_by_name:
+            self.btn_sort.setText("Sort by Time")
+            self.btn_sort.setStyleSheet("background-color: #4CAF50; color: white;")
+        else:
+            self.btn_sort.setText("Sort by Name")
+            self.btn_sort.setStyleSheet("")
+        
+        # 테이블 새로고침
+        self.refresh_table()
+
+    def toggle_reverse(self):
+        """역순 정렬 토글"""
+        self.sort_reverse = not self.sort_reverse
+        if self.sort_reverse:
+            self.btn_reverse.setText("Normal")
+            self.btn_reverse.setStyleSheet("background-color: #FF9800; color: white;")
+        else:
+            self.btn_reverse.setText("Reverse")
+            self.btn_reverse.setStyleSheet("")
+        
+        # 테이블 새로고침
+        self.refresh_table()
+
+    def sort_messages(self, messages):
+        """메시지 정렬"""
+        if self.sort_by_name:
+            # 메시지 이름으로 정렬 (신호 이름도 고려)
+            return sorted(messages, key=lambda x: (x[1], x[2]), reverse=self.sort_reverse)
+        else:
+            # 시간순 정렬 (기본)
+            if self.sort_reverse:
+                return list(reversed(messages))
+            return messages
+
+    def filter_messages(self, messages):
+        """메시지 필터링"""
+        if not self.filter_active:
+            return messages
+        
+        filtered = []
+        for time, msg, sig, val in messages:
+            # 메시지 이름 필터링
+            if self.filter_message and self.filter_message.lower() not in msg.lower():
+                continue
+            # 신호 이름 필터링
+            if self.filter_signal and self.filter_signal.lower() not in sig.lower():
+                continue
+            filtered.append((time, msg, sig, val))
+        
+        return filtered
+
+    def show_filter_dialog(self):
+        """필터 설정 다이얼로그 표시"""
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("메시지 필터 설정")
+        dialog.setModal(True)
+        dialog.resize(400, 200)
+        
+        layout = QtWidgets.QVBoxLayout(dialog)
+        
+        # 메시지 이름 필터
+        msg_layout = QtWidgets.QHBoxLayout()
+        msg_layout.addWidget(QtWidgets.QLabel("메시지 이름:"))
+        msg_edit = QtWidgets.QLineEdit(self.filter_message)
+        msg_edit.setPlaceholderText("예: VehicleStatus, RadarObj1")
+        msg_layout.addWidget(msg_edit)
+        layout.addLayout(msg_layout)
+        
+        # 신호 이름 필터
+        sig_layout = QtWidgets.QHBoxLayout()
+        sig_layout.addWidget(QtWidgets.QLabel("신호 이름:"))
+        sig_edit = QtWidgets.QLineEdit(self.filter_signal)
+        sig_edit.setPlaceholderText("예: VehicleSpeed, RelPosX1")
+        sig_layout.addWidget(sig_edit)
+        layout.addLayout(sig_layout)
+        
+        # 버튼들
+        btn_layout = QtWidgets.QHBoxLayout()
+        
+        apply_btn = QtWidgets.QPushButton("적용")
+        clear_btn = QtWidgets.QPushButton("필터 해제")
+        cancel_btn = QtWidgets.QPushButton("취소")
+        
+        apply_btn.clicked.connect(lambda: self.apply_filter(msg_edit.text(), sig_edit.text(), dialog))
+        clear_btn.clicked.connect(lambda: self.clear_filter(dialog))
+        cancel_btn.clicked.connect(dialog.reject)
+        
+        btn_layout.addWidget(apply_btn)
+        btn_layout.addWidget(clear_btn)
+        btn_layout.addWidget(cancel_btn)
+        layout.addLayout(btn_layout)
+        
+        dialog.exec_()
+
+    def apply_filter(self, message_filter, signal_filter, dialog):
+        """필터 적용"""
+        self.filter_message = message_filter.strip()
+        self.filter_signal = signal_filter.strip()
+        self.filter_active = bool(self.filter_message or self.filter_signal)
+        
+        if self.filter_active:
+            self.btn_filter.setText("Filter ON")
+            self.btn_filter.setStyleSheet("background-color: #2196F3; color: white;")
+        else:
+            self.btn_filter.setText("Filter")
+            self.btn_filter.setStyleSheet("")
+        
+        dialog.accept()
+        self.refresh_table()
+
+    def clear_filter(self, dialog):
+        """필터 해제"""
+        self.filter_message = ""
+        self.filter_signal = ""
+        self.filter_active = False
+        self.btn_filter.setText("Filter")
+        self.btn_filter.setStyleSheet("")
+        
+        dialog.accept()
+        self.refresh_table()
+
     def add_can_message(self, msg):
         if not self.receive_active:
             return
 
         try:
-            message = self.db.get_message_by_frame_id(msg.arbitration_id)
-            signals = message.decode(msg.data)
+            # TSMaster 스타일 고급 CAN 데이터 처리기 사용
+            advanced_msg = self.tsmaster_processor.process_message(msg)
             current_time = QtCore.QDateTime.currentDateTime()
 
             if self.start_time is not None:
@@ -538,28 +614,40 @@ class CanDataViewer(QtWidgets.QWidget):
             else:
                 display_time = timestamp_seconds_str
 
-            for sig_name, val in signals.items():
-                self.messages.append((display_time, message.name, sig_name, val))
+            # 메시지 상태에 따른 처리
+            if advanced_msg.status == MessageStatus.VALID:
+                for sig_name, val in advanced_msg.signals.items():
+                    self.messages.append((display_time, advanced_msg.message_name, sig_name, val))
 
-            # 레이더 데이터 처리 (ID 200-209)
-            if 200 <= msg.arbitration_id <= 209:
-                self._process_radar_data(msg.arbitration_id, signals, elapsed_sec)
+                # 레이더 데이터 처리 (ID 200-209)
+                if 200 <= advanced_msg.message_id <= 209:
+                    self._process_radar_data(advanced_msg.message_id, advanced_msg.signals, elapsed_sec)
 
-            if self.logging_active:
-                if self.last_logged_time is None or elapsed_sec > self.last_logged_time:
-                    self.last_logged_time = elapsed_sec
-                    new_row = self.current_data.copy()
-                    new_row['Timestamp'] = timestamp_seconds_str
-                    self.logged_rows.append(new_row)
+                if self.logging_active:
+                    if self.last_logged_time is None or elapsed_sec > self.last_logged_time:
+                        self.last_logged_time = elapsed_sec
+                        new_row = self.current_data.copy()
+                        new_row['Timestamp'] = timestamp_seconds_str
+                        self.logged_rows.append(new_row)
 
-                for sig_name, val in signals.items():
-                    self.current_data[sig_name] = val
+                    for sig_name, val in advanced_msg.signals.items():
+                        self.current_data[sig_name] = val
+            else:
+                # 유효하지 않은 메시지도 표시 (상세한 오류 정보 포함)
+                status_info = f"{advanced_msg.status.value.upper()}"
+                error_info = f"{status_info}: {advanced_msg.error_message}" if advanced_msg.error_message else status_info
+                self.messages.append((display_time, advanced_msg.message_name, error_info, 
+                                    f"DLC:{advanced_msg.dlc}, Retry:{advanced_msg.retry_count}"))
+                
+                if advanced_msg.status != MessageStatus.VALID:
+                    print(f"CAN 메시지 처리 실패 - ID: {advanced_msg.message_id}, "
+                          f"상태: {advanced_msg.status.value}, 오류: {advanced_msg.error_message}")
 
             if len(self.messages) > 1000:
                 self.messages = self.messages[-1000:]
 
         except Exception as e:
-            print(f"디코딩 실패 (ID:{msg.arbitration_id}): {e}")
+            print(f"CAN 메시지 처리 중 예외 발생 (ID:{msg.arbitration_id}): {e}")
 
     def _process_radar_data(self, msg_id, signals, timestamp):
         """레이더 데이터 처리 및 RadarDataManager 업데이트"""
@@ -588,8 +676,10 @@ class CanDataViewer(QtWidgets.QWidget):
 
     def refresh_table(self):
         try:
-            # 메인 테이블 업데이트
+            # 메인 테이블 업데이트 (필터링 및 정렬 적용)
             display = self.messages[-100:]
+            display = self.filter_messages(display)
+            display = self.sort_messages(display)
             self.table.setRowCount(len(display))
             for row, (time, msg, sig, val) in enumerate(display):
                 self.table.setItem(row, 0, QtWidgets.QTableWidgetItem(time))
@@ -628,6 +718,16 @@ class CanDataViewer(QtWidgets.QWidget):
                           f"Last Update: {summary['last_update_time']:.1f}s")
             self.radar_summary.setText(summary_text)
             
+            # TSMaster 스타일 통계 업데이트
+            stats = self.tsmaster_processor.get_statistics()
+            stats_text = (f"TSMaster CAN Stats - Total: {stats['total_messages']}, "
+                         f"Valid: {stats['valid_messages']}, "
+                         f"Errors: {stats['invalid_messages']}, "
+                         f"DLC Mismatch: {stats['dlc_mismatches']}, "
+                         f"Success Rate: {stats.get('success_rate', 0):.1f}%, "
+                         f"Avg Time: {stats.get('average_processing_time', 0)*1000:.2f}ms")
+            self.stats_label.setText(stats_text)
+            
         except Exception as e:
             print(f"레이더 테이블 업데이트 실패: {e}")
 
@@ -662,8 +762,8 @@ def main():
         print("프로그램이 Ctrl+C로 종료되었습니다.")
         if viewer.can_interface:
             viewer.disconnect_can()
-        if viewer.dummy_data_active:
-            viewer.stop_dummy_data_transmission()
+        if hasattr(viewer, 'tsmaster_processor'):
+            viewer.tsmaster_processor.shutdown()
 
 
 

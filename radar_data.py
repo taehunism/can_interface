@@ -16,9 +16,9 @@ class RadarObject:
     rel_pos_y: float  # 상대 위치 Y (미터)
     rel_vel_x: float  # 상대 속도 X (m/s)
     rel_acc_x: float  # 상대 가속도 X (m/s²)
-    distance: float   # 거리 (미터) - 계산된 값
-    angle: float      # 각도 (도) - 계산된 값
     timestamp: float  # 타임스탬프
+    distance: float = 0.0   # 거리 (미터) - 계산된 값
+    angle: float = 0.0      # 각도 (도) - 계산된 값
     
     def __post_init__(self):
         """거리와 각도를 자동 계산"""

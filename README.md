@@ -4,21 +4,32 @@ Ubuntu에서 개발된 virtual CAN 프로젝트를 Windows 환경에서 실제 U
 
 ## 주요 기능
 
+- **TSMaster 스타일 고급 CAN 처리**: TSMaster에서 사용하는 오픈소스 라이브러리 패턴을 적용한 고급 CAN 데이터 처리
 - **실제 USB CAN 인터페이스 지원**: PEAK PCAN-USB, Vector, IXXAT 등 다양한 CAN 인터페이스 지원
+- **DLC 불일치 자동 처리**: DBC와 실제 데이터의 DLC가 다를 때 자동으로 패딩/자르기 처리
+- **메시지 우선순위 처리**: 레이더 데이터(높음), 차량 상태(보통), 기타(낮음) 우선순위 기반 처리
+- **실시간 콜백 시스템**: 메시지별 콜백 함수 등록으로 실시간 데이터 처리
+- **고급 오류 처리**: 메시지 상태별 세분화된 오류 처리 및 재시도 메커니즘
+- **성능 모니터링**: 처리 시간, 초당 메시지 수, 성공률 등 실시간 성능 모니터링
+- **안정적인 DBC 디코딩**: 오류 처리 및 검증을 통한 안정적인 CAN 메시지 디코딩
 - **레이더 데이터 실시간 처리**: CAN 메시지에서 레이더 객체 데이터를 추출하여 직접 변수로 활용
 - **GUI 인터페이스**: PyQt5 기반의 사용자 친화적인 인터페이스
 - **데이터 로깅**: CAN 메시지를 CSV 파일로 저장
 - **실시간 모니터링**: 레이더 객체의 거리, 각도, 속도 등을 실시간으로 표시
+- **고급 정렬 기능**: 메시지 이름, 신호 이름, 시간순 정렬 및 역순 정렬 지원
+- **실시간 필터링**: 메시지 이름 및 신호 이름 기반 실시간 필터링
+- **통계 정보**: CAN 메시지 처리 통계 및 오류율 실시간 표시
 
 ## 파일 구조
 
 ```
 can_interface/
 ├── can_interface.py      # 메인 CAN 수신 프로그램 (GUI)
+├── tsmaster_can_processor.py # TSMaster 스타일 고급 CAN 데이터 처리 클래스
 ├── send_can.py          # CAN 송신 프로그램 (테스트용)
 ├── radar_data.py        # 레이더 데이터 관리 클래스
-├── radar_example.py     # 레이더 데이터 활용 예제
 ├── test_can.py          # CAN 인터페이스 테스트 프로그램
+├── test_tsmaster_can.py # TSMaster 스타일 CAN 처리 테스트 프로그램
 ├── candb_ex.dbc         # CAN 데이터베이스 파일
 ├── requirements.txt     # Python 패키지 의존성
 ├── WINDOWS_SETUP.md     # Windows 설치 가이드
@@ -75,7 +86,23 @@ python radar_example.py
 
 # CAN 인터페이스 테스트 실행
 python test_can.py
+
+# TSMaster 스타일 CAN 처리 테스트 실행
+python test_tsmaster_can.py
 ```
+
+## 고급 기능 사용법
+
+### 정렬 기능
+- **Sort by Name**: 메시지 이름과 신호 이름으로 정렬
+- **Sort by Time**: 시간순 정렬 (기본)
+- **Reverse**: 현재 정렬의 역순으로 표시
+
+### 필터링 기능
+- **Filter**: 특정 메시지나 신호만 표시
+  - 메시지 이름 필터: 예) "VehicleStatus", "RadarObj1"
+  - 신호 이름 필터: 예) "VehicleSpeed", "RelPosX1"
+  - 대소문자 구분 없이 부분 일치 검색
 
 ## 레이더 데이터 활용
 
