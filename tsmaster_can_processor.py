@@ -126,7 +126,9 @@ class TSMasterCanProcessor:
             'message_prioritization': True,
             'signal_validation': True,  # 경고만 출력, 디코딩은 계속
             'cycle_time_tracking': True,
-            'tolerant_decoding': True  # 관대한 디코딩 모드
+            'tolerant_decoding': True,  # 관대한 디코딩 모드
+            'use_default_on_decode_error': False,  # 디코딩 실패 시 기본값 사용 여부
+            'unknown_id_basic_signals': True  # 미정의 ID에 RawBytes/Length 표시
         }
     
     def _load_dbc(self):
@@ -142,7 +144,8 @@ class TSMasterCanProcessor:
                     'expected_dlc': message.length,
                     'signals': {signal.name: signal for signal in message.signals},
                     'cycle_time': getattr(message, 'cycle_time', 0.0),
-                    'priority': self._determine_priority(message)
+                    'priority': self._determine_priority(message),
+                    'message_id': message.frame_id
                 }
                 
                 # 신호 정의도 저장
@@ -159,6 +162,19 @@ class TSMasterCanProcessor:
         except Exception as e:
             logger.error(f"DBC 파일 로드 실패: {e}")
             self.db = None
+
+    def reload_dbc(self, dbc_path: str):
+        """DBC 파일을 재로드하고 메시지/신호 정의를 업데이트"""
+        try:
+            self.dbc_path = dbc_path
+            self.message_definitions.clear()
+            self.signal_definitions.clear()
+            self._load_dbc()
+            logger.info(f"DBC 재로드 완료: {dbc_path}")
+            return True
+        except Exception as e:
+            logger.error(f"DBC 재로드 실패: {e}")
+            return False
     
     def _determine_priority(self, message) -> MessagePriority:
         """메시지 우선순위 결정"""
@@ -265,20 +281,39 @@ class TSMasterCanProcessor:
                 
             except Exception as e:
                 logger.error(f"신호 디코딩 중 예외 발생 - ID: {advanced_msg.message_id}, 오류: {e}")
-                
-                # 최후의 수단: 기본값으로 신호 생성
-                try:
-                    default_signals = self._create_default_signals(message_def)
-                    advanced_msg.signals = default_signals
-                    advanced_msg.status = MessageStatus.VALID  # 기본값이라도 유효로 처리
-                    advanced_msg.error_message = f"Used default values due to: {e}"
-                    logger.warning(f"기본값으로 처리 완료 - ID: {advanced_msg.message_id}")
-                except Exception as e2:
+
+                if self.config.get('use_default_on_decode_error', False):
+                    # 최후의 수단: 기본값으로 신호 생성 (옵션)
+                    try:
+                        default_signals = self._create_default_signals(message_def)
+                        advanced_msg.signals = default_signals
+                        advanced_msg.status = MessageStatus.VALID
+                        advanced_msg.error_message = f"Used default values due to: {e}"
+                        logger.warning(f"기본값으로 처리 완료 - ID: {advanced_msg.message_id}")
+                    except Exception as e2:
+                        advanced_msg.status = MessageStatus.ERROR
+                        advanced_msg.error_message = f"Complete decoding failure: {e2}"
+                        self.stats['decoding_errors'] += 1
+                        logger.error(f"완전한 디코딩 실패 - ID: {advanced_msg.message_id}, 오류: {e2}")
+                else:
                     advanced_msg.status = MessageStatus.ERROR
-                    advanced_msg.error_message = f"Complete decoding failure: {e2}"
+                    advanced_msg.error_message = str(e)
                     self.stats['decoding_errors'] += 1
-                    logger.error(f"완전한 디코딩 실패 - ID: {advanced_msg.message_id}, 오류: {e2}")
         
+        else:
+            # DBC에 정의가 없는 메시지: 최소 표시용 폴백 (옵션)
+            if self.config.get('unknown_id_basic_signals', True):
+                try:
+                    basic_signals = {
+                        'RawBytes': advanced_msg.raw_data.hex(),
+                        'Length': len(advanced_msg.raw_data),
+                    }
+                    advanced_msg.signals = basic_signals
+                    advanced_msg.status = MessageStatus.VALID
+                except Exception as e:
+                    advanced_msg.status = MessageStatus.ERROR
+                    advanced_msg.error_message = f"Unknown ID handling failed: {e}"
+
         # 처리 시간 기록
         processing_time = time.time() - start_time
         advanced_msg.processing_time = processing_time
@@ -313,27 +348,16 @@ class TSMasterCanProcessor:
     
     def _handle_dlc_mismatch(self, advanced_msg: AdvancedCanMessage, message_def: Dict) -> bool:
         """DLC 불일치 처리 - CAN FD 지원 강화"""
-        expected_dlc = message_def['expected_dlc']
-        actual_dlc = advanced_msg.dlc
-        actual_data_length = len(advanced_msg.raw_data)
-        
-        # CAN FD DLC 매핑 (DLC 16-64는 특별한 바이트 수 매핑)
-        can_fd_dlc_mapping = {
-            16: 20, 17: 24, 18: 32, 19: 48, 20: 64
-        }
-        
-        # 실제 데이터 길이 계산
-        if actual_dlc <= 15:
-            actual_bytes = actual_dlc
-        else:
-            actual_bytes = can_fd_dlc_mapping.get(actual_dlc, actual_dlc)
+        expected_dlc = message_def['expected_dlc']  # bytes expected by DBC
+        # 실제 데이터 길이는 payload 바이트 수로 판단 (CAN/CAN FD 모두 적용)
+        actual_bytes = len(advanced_msg.raw_data)
         
         if actual_bytes != expected_dlc:
             self.stats['dlc_mismatches'] += 1
-            logger.warning(f"DLC 불일치 감지 - ID: {advanced_msg.message_id}, 예상: {expected_dlc}바이트, 실제: {actual_bytes}바이트 (DLC: {actual_dlc})")
+            logger.warning(f"DLC 불일치 감지 - ID: {advanced_msg.message_id}, 예상: {expected_dlc}바이트, 실제: {actual_bytes}바이트 (수신길이 기준)")
             
             # 강제로 DLC 조정하여 디코딩 성공 보장
-            original_data = advanced_msg.raw_data.copy()
+            original_data = bytes(advanced_msg.raw_data)
             
             if actual_bytes < expected_dlc:
                 # 패딩: 부족한 바이트를 0으로 채움
@@ -345,15 +369,15 @@ class TSMasterCanProcessor:
                 advanced_msg.raw_data = advanced_msg.raw_data[:expected_dlc]
                 logger.info(f"데이터 자르기 완료 - ID: {advanced_msg.message_id}, {actual_bytes - expected_dlc}바이트 제거")
             
-            # DLC 업데이트 (CAN FD DLC로 변환)
-            advanced_msg.dlc = self._bytes_to_can_fd_dlc(expected_dlc)
+            # DLC 필드는 화면 표시에 사용: 기대 바이트 수로 동기화
+            advanced_msg.dlc = expected_dlc
             
             # 디코딩 시도 전 데이터 검증
             if len(advanced_msg.raw_data) != expected_dlc:
                 logger.error(f"DLC 조정 실패 - ID: {advanced_msg.message_id}")
                 return False
             
-            logger.info(f"DLC 조정 성공 - ID: {advanced_msg.message_id}, 최종 길이: {len(advanced_msg.raw_data)}바이트 (DLC: {advanced_msg.dlc})")
+            logger.info(f"DLC 조정 성공 - ID: {advanced_msg.message_id}, 최종 길이: {len(advanced_msg.raw_data)}바이트")
         
         return True
     
@@ -415,13 +439,18 @@ class TSMasterCanProcessor:
         validated_signals = {}
         for signal_name, value in signals.items():
             signal_def = message_def['signals'][signal_name]
-            
-            # 범위 검사 (경고만 출력, 디코딩은 계속)
-            if hasattr(signal_def, 'minimum') and hasattr(signal_def, 'maximum'):
-                if not (signal_def.minimum <= value <= signal_def.maximum):
-                    logger.warning(f"신호 범위 초과 - {signal_name}: {value} (범위: {signal_def.minimum}~{signal_def.maximum})")
-                    # 범위를 벗어나도 값을 그대로 사용 (디코딩 성공으로 처리)
-            
+
+            # 범위 검사 (경고만 출력, 디코딩은 계속). minimum/maximum가 None인 경우 비교하지 않음
+            minimum_value = getattr(signal_def, 'minimum', None)
+            maximum_value = getattr(signal_def, 'maximum', None)
+            if minimum_value is not None and maximum_value is not None:
+                try:
+                    if not (minimum_value <= value <= maximum_value):
+                        logger.warning(f"신호 범위 초과 - {signal_name}: {value} (범위: {minimum_value}~{maximum_value})")
+                except TypeError:
+                    # 값 타입이 비교 불가능한 경우 범위 검사를 건너뜀
+                    pass
+
             validated_signals[signal_name] = value
         
         return validated_signals
